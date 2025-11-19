@@ -21,9 +21,20 @@ c_flags <- function() {
   if (include_dir == "" || !dir.exists(include_dir))
     stop("C flags not found: The 'inst/include' directory is missing from hdf5lib.")
   
+  # Ensure a header file actually exists in that directory
+  if (!file.exists(file.path(include_dir, "hdf5.h")))
+    stop("Header file not found: 'include/hdf5.h' is missing from hdf5lib.")
+  
+  # Quote if the path contains spaces or other shell-special characters.
+  # Don't quote by default, as that can sometimes cause other problems.
+  normalized_path <- normalizePath(include_dir, winslash = "/", mustWork = TRUE)
+  if (grepl("[ &'();]", normalized_path)) {
+    normalized_path <- shQuote(normalized_path)
+  }
+  
   # Return the compiler flag
   # Use normalizePath and winslash for robust paths
-  paste0("-I", shQuote(normalizePath(include_dir, winslash = "/", mustWork = TRUE)))
+  paste0("-I", normalized_path)
 }
 
 
@@ -31,7 +42,7 @@ c_flags <- function() {
 #'
 #' @description
 #' Provides the required linker flags to link against the static HDF5
-#' library (`libhdf5.a`) bundled with the `hdf5lib` package.
+#' library (`libhdf5z.a`) bundled with the `hdf5lib` package.
 #'
 #' @return A scalar character vector containing the linker flags.
 #'
@@ -49,18 +60,24 @@ ld_flags <- function() {
     stop("Linker flags not found: The 'inst/lib' directory is missing from hdf5lib.")
   
   # Ensure the static library file actually exists in that directory
-  static_lib_file <- file.path(lib_dir, "libhdf5.a")
-  if (!file.exists(static_lib_file))
-    stop("Linker flags not found: 'lib/libhdf5.a' is missing from hdf5lib.")
+  if (!file.exists(file.path(lib_dir, "libhdf5z.a")))
+    stop("Static library not found: 'lib/libhdf5z.a' is missing from hdf5lib.")
   
-  # Create the -L flag pointing to the directory
-  static_lib_path_flag <- shQuote(normalizePath(static_lib_file, winslash = "/"))
+  # Quote if the path contains spaces or other shell-special characters.
+  # Don't quote by default, as that can sometimes cause other problems.
+  normalized_path <- normalizePath(lib_dir, winslash = "/", mustWork = TRUE)
+  if (grepl("[ &'();]", normalized_path)) {
+    normalized_path <- shQuote(normalized_path)
+  }
+  
+  lib_dir_flag <- paste0("-L", normalized_path)
 
   # Create a vector of all flags.
   # The downstream package must now link to hdf5 and its dependencies.
   flags <- c(
-    static_lib_path_flag, # Pass the full path to libhdf5.a
-    "-lpthread",          # HDF5 dependency for thread-safety
+    lib_dir_flag, # Pass the full path hdf5lib's /lib directory
+    "-lhdf5z",    # Link to our libhdf5z.a static library
+    "-lpthread",  # HDF5 dependency for thread-safety
     if (.Platform$OS.type == "unix") "-ldl" # HDF5 dependency on Unix
   )
   

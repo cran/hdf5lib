@@ -44,14 +44,14 @@ echo "--- [hdf5lib] Configuring bundled HDF5 library..."
   --disable-tools \
   --disable-dependency-tracking \
   --without-szlib \
-  CFLAGS="$CFLAGS -fPIC" \
+  CFLAGS="$CFLAGS -fPIC -O2 -g0" \
   LDFLAGS="$LDFLAGS -L${ZLIB_SRC}" \
   CPPFLAGS="$CPPFLAGS $R_CPPFLAGS -I${ZLIB_SRC}"
 
 # Compile HDF5 with warning suppressions
 echo "--- [hdf5lib] Compiling HDF5 static library..."
 make \
-  CFLAGS="$CFLAGS -fPIC -Wno-deprecated-declarations -Wno-format -Wno-format-extra-args -Wno-implicit-fallthrough -Wno-unused-parameter -Wno-strict-prototypes -Wno-unused-function -Wno-unneeded-internal-declaration -Wno-sign-conversion -Wno-enum-enum-conversion -Wno-c11-extensions" \
+  CFLAGS="$CFLAGS -fPIC -O2 -g0 -Wno-deprecated-declarations -Wformat -Wno-format-security -Wno-format-extra-args -Wno-implicit-fallthrough -Wno-unused-parameter -Wno-strict-prototypes -Wno-unused-function" \
   CPPFLAGS="$CPPFLAGS $R_CPPFLAGS -I${ZLIB_SRC}"
 
 
@@ -61,12 +61,23 @@ ar -x "$HDF5_SRC/src/.libs/libhdf5.a"
 ar -x "$HDF5_SRC/hl/src/.libs/libhdf5_hl.a"
 ar -x "$ZLIB_SRC/libz.a"
 
-echo "--- [hdf5lib] Merging all .o files into libhdf5.a..."
-ar -q libhdf5.a *.o
-ranlib libhdf5.a
+# --- Conditional Stripping (Non-Portable, Size-Reduction Step) ---
+if command -v objcopy >/dev/null 2>&1; then
+    echo "--- [hdf5lib] Found objcopy. Stripping object files for maximum size reduction..."
+    for f in *.o; do
+        objcopy --strip-debug "$f"
+    done
+else
+    echo "--- [hdf5lib] objcopy not found. Skipping intermediate object stripping."
+fi
+# ------------------------------------------------------------------
+
+echo "--- [hdf5lib] Merging all .o files into libhdf5z.a..."
+ar -q libhdf5z.a *.o
+ranlib libhdf5z.a
 
 echo "--- [hdf5lib] Stripping static library..."
-strip -S libhdf5.a
+strip -S libhdf5z.a
 
 
 # --- 4. Finalize R package ---
@@ -79,7 +90,7 @@ cp "$HDF5_SRC"/hl/src/*.h inst/include/
 
 echo "--- [hdf5lib] Exposing final merged static library..."
 mkdir -p inst/lib
-cp "$HDF5_SRC/libhdf5.a" inst/lib/
+cp "$HDF5_SRC/libhdf5z.a" inst/lib/
 
 echo "--- [hdf5lib] Cleaning up build-time directories..."
 rm -rf src
