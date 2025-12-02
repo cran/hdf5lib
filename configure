@@ -1,99 +1,164 @@
 #!/bin/sh
 set -e
 
-echo "--- [hdf5lib] Starting Unix configuration (STATIC) ---"
+ZLIB_VER="1.3.1"
+HDF5_VER="2.0.0"
 
-# Input directories
-WD="$(pwd)"
-ZLIB_SRC="$WD/src/zlib"
-HDF5_SRC="$WD/src/hdf5"
+echo "--- [hdf5lib] Starting Configuration (Static) ---"
 
-# R_HOME is set by the R build system
-R_EXE="${R_HOME}/bin/R"
-R_CPPFLAGS=$("$R_EXE" CMD config --cppflags)
+# 1. Environment Setup ---------------------------------------------------------
 
-
-# Extract hdf5 and zlib tarballs
-# Use R's internal untar for cross-platform reliability
-echo "--- [hdf5lib] Decompressing HDF5 and zlib tarballs..."
-cd "$WD/src"
-"$R_EXE" -q -e "utils::untar('hdf5.tar.gz')"
-"$R_EXE" -q -e "utils::untar('zlib.tar.gz')"
-chmod +x hdf5/configure zlib/configure
-
-
-# --- 1. Build static zlib ---
-echo "--- [hdf5lib] Configuring and compiling static zlib..."
-cd "$ZLIB_SRC"
-CC="$CC" CFLAGS="$CFLAGS -fPIC" ./configure --static
-make libz.a CFLAGS="$CFLAGS -fPIC"
-
-
-# --- 2. Build static HDF5 ---
-echo "--- [hdf5lib] Starting HDF5 build..."
-cd "$HDF5_SRC"
-
-# Configure HDF5 with thread-safety enabled
-echo "--- [hdf5lib] Configuring bundled HDF5 library..."
-./configure \
-  --disable-shared \
-  --enable-static \
-  --enable-threadsafe \
-  --enable-unsupported \
-  --disable-tests \
-  --disable-tools \
-  --disable-dependency-tracking \
-  --without-szlib \
-  CFLAGS="$CFLAGS -fPIC -O2 -g0" \
-  LDFLAGS="$LDFLAGS -L${ZLIB_SRC}" \
-  CPPFLAGS="$CPPFLAGS $R_CPPFLAGS -I${ZLIB_SRC}"
-
-# Compile HDF5 with warning suppressions
-echo "--- [hdf5lib] Compiling HDF5 static library..."
-make \
-  CFLAGS="$CFLAGS -fPIC -O2 -g0 -Wno-deprecated-declarations -Wformat -Wno-format-security -Wno-format-extra-args -Wno-implicit-fallthrough -Wno-unused-parameter -Wno-strict-prototypes -Wno-unused-function" \
-  CPPFLAGS="$CPPFLAGS $R_CPPFLAGS -I${ZLIB_SRC}"
-
-
-# --- 3. Extract, Merge, and Strip ---
-echo "--- [hdf5lib] Extracting all object files..."
-ar -x "$HDF5_SRC/src/.libs/libhdf5.a"
-ar -x "$HDF5_SRC/hl/src/.libs/libhdf5_hl.a"
-ar -x "$ZLIB_SRC/libz.a"
-
-# --- Conditional Stripping (Non-Portable, Size-Reduction Step) ---
-if command -v objcopy >/dev/null 2>&1; then
-    echo "--- [hdf5lib] Found objcopy. Stripping object files for maximum size reduction..."
-    for f in *.o; do
-        objcopy --strip-debug "$f"
-    done
-else
-    echo "--- [hdf5lib] objcopy not found. Skipping intermediate object stripping."
+# Locate R and ensure it exists
+R_EXE="${R_HOME}/bin${R_ARCH_BIN}/R"
+if [ ! -f "$R_EXE" ]; then
+  R_EXE="${R_HOME}/bin/R"
+  if [ ! -f "$R_EXE" ]; then
+    R_EXE=$(which R 2>/dev/null || true)
+    if [ -z "$R_EXE" ]; then
+      echo "Error: R not found. Please ensure R is installed and in your PATH."
+      exit 1
+    fi
+  fi
 fi
-# ------------------------------------------------------------------
 
-echo "--- [hdf5lib] Merging all .o files into libhdf5z.a..."
-ar -q libhdf5z.a *.o
-ranlib libhdf5z.a
-
-echo "--- [hdf5lib] Stripping static library..."
-strip -S libhdf5z.a
+# Detect OS (Windows vs Unix) for logic branching
+case "$(uname -s)" in
+  CYGWIN*|MINGW*|MSYS*) WIN=1; EXE=".exe" ;;
+  *)                    WIN=0; EXE=""     ;;
+esac
 
 
-# --- 4. Finalize R package ---
-cd "$WD"
+# 2. R Configuration Inspection ------------------------------------------------
+# Fetch compilation flags from R to ensure binary compatibility
+R_CC=$("$R_EXE" CMD config CC)
+R_CFLAGS=$("$R_EXE" CMD config CFLAGS)
+R_CPICFLAGS=$("$R_EXE" CMD config CPICFLAGS)
+R_CPPFLAGS=$("$R_EXE" CMD config CPPFLAGS)
+R_LDFLAGS=$("$R_EXE" CMD config LDFLAGS)
+R_AR=$("$R_EXE" CMD config AR)
+R_MAKE=$("$R_EXE" CMD config MAKE)
 
-echo "--- [hdf5lib] Exposing minified HDF5 headers..."
-mkdir -p inst/include
-cp "$HDF5_SRC"/src/*.h    inst/include/
-cp "$HDF5_SRC"/hl/src/*.h inst/include/
+# Set defaults if R config returns empty
+: "${R_AR:=ar}"
+: "${R_MAKE:=make}"
 
-echo "--- [hdf5lib] Exposing final merged static library..."
-mkdir -p inst/lib
-cp "$HDF5_SRC/libhdf5z.a" inst/lib/
+# Construct final flags
+# Add optimization flag if not already present
+export CC="$R_CC"
+case " $R_CFLAGS " in
+  *" -O"*) export CFLAGS="$R_CFLAGS $R_CPICFLAGS" ;;
+  *)       export CFLAGS="$R_CFLAGS $R_CPICFLAGS -O2" ;;
+esac
 
-echo "--- [hdf5lib] Cleaning up build-time directories..."
-rm -rf src
+# 3. Build Dependencies --------------------------------------------------------
+echo "--- [hdf5lib] Decompressing sources..."
+mkdir build
+cd build
 
-echo "--- [hdf5lib] Unix configuration complete. ---"
+tar -xf "../src/zlib-$ZLIB_VER.tar.gz"
+tar -xf "../src/hdf5-$HDF5_VER.tar.gz"
+cp ../src/H5pubconf.h        "hdf5-$HDF5_VER/src/"
+cp ../src/find_byte_widths.c "hdf5-$HDF5_VER/"
+
+echo "--- [hdf5lib] Building ZLIB..."
+cd "zlib-$ZLIB_VER"
+export CPPFLAGS="-I. $R_CPPFLAGS"
+echo "  CC:       $CC"
+echo "  CFLAGS:   $CFLAGS"
+echo "  CPPFLAGS: $CPPFLAGS"
+
+if [ "$WIN" -eq 1 ]; then
+  "$R_MAKE" -f win32/Makefile.gcc libz.a >/dev/null
+else
+  chmod +x ./configure
+  ./configure --static >/dev/null
+  "$R_MAKE" libz.a >/dev/null
+fi
+
+# Extract ZLIB objects to merge them into the final library
+rm *.o
+"$R_AR" -x libz.a
+
+cd ..
+
+
+# 4. Build HDF5 ----------------------------------------------------------------
+echo "--- [hdf5lib] Building HDF5..."
+cd "hdf5-$HDF5_VER"
+
+# A. Generators
+# Compile and run generator to detect system type sizes (creates src/H5_byte_widths.h)
+# Use unquoted $CC to allow arguments like -std=gnu11
+$CC $CPPFLAGS $CFLAGS -o find_byte_widths$EXE ./find_byte_widths.c
+./find_byte_widths$EXE | tr -d '\r' > src/H5_byte_widths.h
+
+# B. Compilation
+# Use the pre-generated Makefile (from prep_hdf5.r) to build all objects
+# Explicitly passing CC/CFLAGS overrides the defaults in the Makefile
+"$R_EXE" -s -e "invisible(file.copy(R.home('include'), '.', recursive = TRUE))"
+
+# Define base flags
+CPPFLAGS="-Isrc -Ihl/src -I../zlib-$ZLIB_VER -Iinclude $R_CPPFLAGS"
+CPPFLAGS="$CPPFLAGS -DH5_BUILT_AS_STATIC_LIB -DH5_DLL= -DH5HL_DLL="
+
+echo "  CC:       $CC"
+echo "  CFLAGS:   $CFLAGS"
+echo "  CPPFLAGS: $CPPFLAGS"
+
+for src in src/*.c hl/src/*.c; do
+  obj=$(basename "$src" .c).o
+  echo "  \$CC \$CFLAGS \$CPPFLAGS -c $src -o $obj"
+  $CC $CFLAGS $CPPFLAGS -c "$src" -o "$obj"
+done
+
+cd ..
+
+
+# 5. Link and Archive ----------------------------------------------------------
+echo "--- [hdf5lib] Linking static library..."
+
+# Detect LTO (Link Time Optimization) flags
+# LTO objects contain bytecode that standard 'strip' and 'ld -r' often corrupt
+# without specific plugins. We skip optimization steps if -flto is detected.
+case "$CFLAGS" in
+  *-flto*) LTO=1 ;;
+  *)       LTO=0 ;;
+esac
+
+# Create the final static library
+# Logic: Use partial linking (ld -r) on non-Windows systems to reduce size.
+# We guard this with LTO=0 because ld -r on LTO objects can be fragile.
+if [ "$WIN" -eq 0 ] && [ "$LTO" -eq 0 ] && command -v ld >/dev/null 2>&1; then
+  echo "  Performing partial linking (ld -r)..."
+  # Merge all .o files into one big object (deduplicates symbols/sections)
+  ld -r -o libhdf5z.o "hdf5-$HDF5_VER/"*.o "zlib-$ZLIB_VER/"*.o
+  "$R_AR" -crs libhdf5z.a libhdf5z.o
+else
+  "$R_AR" -crs libhdf5z.a "hdf5-$HDF5_VER/"*.o "zlib-$ZLIB_VER/"*.o
+fi
+
+# Strip debug symbols to reduce installed package size
+# We guard this with LTO=0 because 'strip' often corrupts LTO objects
+if [ "$LTO" -eq 0 ] && command -v strip >/dev/null 2>&1; then
+  echo "  Stripping debug symbols..."
+  strip -S libhdf5z.a || true
+fi
+
+
+# 6. Installation --------------------------------------------------------------
+echo "--- [hdf5lib] Installing..."
+cd ..
+
+# Install headers and library
+mkdir -p inst/lib inst/include
+cp build/"hdf5-$HDF5_VER"/src/*.h    inst/include/
+cp build/"hdf5-$HDF5_VER"/hl/src/*.h inst/include/
+cp build/libhdf5z.a                  inst/lib/
+
+# Cleanup
+rm -rf src build
+
+echo "  Final install size: $(du -sh inst/ | cut -f1)"
+
+echo "--- [hdf5lib] Done. ---"
 exit 0
