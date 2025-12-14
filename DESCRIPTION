@@ -1,7 +1,7 @@
 Package: hdf5lib
 Type: Package
 Title: Headers and Static Libraries for 'HDF5'
-Version: 2.0.0.2
+Version: 2.0.0.3
 Authors@R: c(
     person("Daniel P.", "Smith", email = "dansmith01@gmail.com", role = c("aut", "cre"), comment = c(ORCID = "0000-0002-2479-2044")),
     person("The HDF Group", role = "cph", comment = "Copyright holder of the HDF5 library"),
@@ -26,7 +26,7 @@ Suggests: knitr, rmarkdown, testthat (>= 3.0.0)
 Config/testthat/edition: 3
 RoxygenNote: 7.3.3
 Config/Needs/website: rmarkdown
-Packaged: 2025-11-27 23:21:40 UTC; Daniel
+Packaged: 2025-12-10 17:17:41 UTC; Daniel
 Author: Daniel P. Smith [aut, cre] (ORCID:
     <https://orcid.org/0000-0002-2479-2044>),
   The HDF Group [cph] (Copyright holder of the HDF5 library),
@@ -34,4 +34,4 @@ Author: Daniel P. Smith [aut, cre] (ORCID:
   Gailly Adler [cph] (Copyright holder of the zlib library)
 Maintainer: Daniel P. Smith <dansmith01@gmail.com>
 Repository: CRAN
-Date/Publication: 2025-12-02 15:20:02 UTC
+Date/Publication: 2025-12-14 09:20:02 UTC
