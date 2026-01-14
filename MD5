@@ -1,10 +1,10 @@
-37ce9651d62d17d54a190c91376e76ae *DESCRIPTION
+b41aa39abca85f73ef6f721f909fb96a *DESCRIPTION
 2f0d082bd656919efe4b25f474a6aa38 *LICENSE
 cdc90d1f3fd83f8b9ba83164f7581205 *NAMESPACE
-1ad2ad2fa662173b0b873a1a62467e33 *NEWS.md
+4d543e43800d5e883fbbedfcfa5e42ba *NEWS.md
 d92b7b36809407d243939f724293a6bc *R/flags.r
 b65fbaff8a192e47626c722d6c5d0167 *R/hdf5lib-package.r
-851b8768f8b2e7bb77523a168d1824f5 *README.md
+f9956e9f5f8732a1dd10b4fad12800ac *README.md
 d61863bedd0755a9a2f165245f24f7eb *configure
 8f8b24f0dac046b34646242bc35f2418 *configure.win
 c2bfabc94884eba47941ec607dbd9f52 *inst/COPYRIGHTS
@@ -14,7 +14,7 @@ c6b370a016b5b3294e2f8a1bb050b6f5 *man/hdf5lib-package.Rd
 7070c38cdad9dd91eee6f28749436f0a *man/ld_flags.Rd
 c5333233926897ad29861052be726143 *src/H5pubconf.h
 6c0a0602b2543aa16393a40a0f0f7f92 *src/find_byte_widths.c
-f19484501f80b12dd22839906cc37478 *src/hdf5-2.0.0.tar.gz
+ed6f5bbfaaecf0ec7263b9b641b14318 *src/hdf5-2.0.0.tar.gz
 aa15974f3309c2e07c9363e3b15aab54 *src/zlib-1.3.1.tar.gz
 ed60459c1bb608b4fab39e5c12bdc526 *tests/src/smoke_test.c
 78f10dc54b068df5ca303c5eed039d42 *tests/testthat.r
