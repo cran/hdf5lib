@@ -1,3 +1,11 @@
+# hdf5lib 2.0.0.6
+
+* Accept decimal values for `api` argument in `c_flags()` and `ld_flags()`.
+* New `hdf5lib` hex logo.
+* Updated documentation.
+
+
+
 # hdf5lib 2.0.0.5
 
 * Patched misaligned address in HDF5's `H5Tconv_enum.c` file.
