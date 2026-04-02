@@ -1,12 +1,32 @@
 #!/bin/sh
 set -e
 
-ZLIB_VER="1.3.1"
-HDF5_VER="2.0.0"
+HDF5_VER="2.1.1"
+BLOSC1_VER="1.21.6"
+BLOSC2_VER="2.23.1"
+BSHUF_VER="0.5.2"
+BZIP2_VER="1.0.8"
+LIBAEC_VER="1.1.6"
+LZ4_VER="1.10.0"
+LZF_VER="3.6"
+CSNAPPY_VER="6c10c30"
+ZFP_VER="1.0.1"
+ZLIBNG_VER="2.3.3"
+ZSTD_VER="1.5.7"
+
+
+# 1. Prepare Build and Install Directories -------------------------------------
+mkdir -p build
+mkdir -p inst/lib
+mkdir -p inst/include
+
+cd build
+
+
 
 echo "--- [hdf5lib] Starting Configuration (Static) ---"
 
-# 1. Environment Setup ---------------------------------------------------------
+# 2. Environment Setup ---------------------------------------------------------
 
 # Locate R and ensure it exists
 R_EXE="${R_HOME}/bin${R_ARCH_BIN}/R"
@@ -21,6 +41,7 @@ if [ ! -f "$R_EXE" ]; then
   fi
 fi
 
+
 # Detect OS (Windows vs Unix) for logic branching
 case "$(uname -s)" in
   CYGWIN*|MINGW*|MSYS*) WIN=1; EXE=".exe" ;;
@@ -28,13 +49,13 @@ case "$(uname -s)" in
 esac
 
 
-# 2. R Configuration Inspection ------------------------------------------------
+
+# 3. R Configuration Inspection ------------------------------------------------
 # Fetch compilation flags from R to ensure binary compatibility
 R_CC=$("$R_EXE" CMD config CC)
 R_CFLAGS=$("$R_EXE" CMD config CFLAGS)
 R_CPICFLAGS=$("$R_EXE" CMD config CPICFLAGS)
 R_CPPFLAGS=$("$R_EXE" CMD config CPPFLAGS)
-R_LDFLAGS=$("$R_EXE" CMD config LDFLAGS)
 R_AR=$("$R_EXE" CMD config AR)
 R_MAKE=$("$R_EXE" CMD config MAKE)
 
@@ -42,94 +63,360 @@ R_MAKE=$("$R_EXE" CMD config MAKE)
 : "${R_AR:=ar}"
 : "${R_MAKE:=make}"
 
-# Construct final flags
 # Add optimization flag if not already present
-export CC="$R_CC"
 case " $R_CFLAGS " in
-  *" -O"*) export CFLAGS="$R_CFLAGS $R_CPICFLAGS" ;;
-  *)       export CFLAGS="$R_CFLAGS $R_CPICFLAGS -O2" ;;
+  *" -O"*) R_CFLAGS="$R_CFLAGS" ;;
+  *)       R_CFLAGS="$R_CFLAGS -O2" ;;
 esac
 
+# Suppress Clang's noisy GNU extension warnings for Blosc2 headers
+# (macOS often aliases 'gcc' to 'clang', so we check the version output)
+if "$R_CC" --version 2>&1 | grep -qi "clang"; then
+  R_CFLAGS="$R_CFLAGS -Wno-gnu-zero-variadic-macro-arguments"
+fi
 
-# --- 2b. Capture Runtime/Linker Flags (e.g. Sanitizers) ---
+# Capture Runtime/Linker Flags (e.g. Sanitizers)
 # We need to propagate flags like -fsanitize=address to consumer packages
 # so they can successfully link against our static library.
-
-mkdir -p inst
-for flag in $R_CFLAGS $R_LDFLAGS; do
+for flag in $R_CFLAGS; do
   case "$flag" in
-    -fsanitize=*) echo "$flag" >> inst/exported_flags.txt ;;
+    -fsanitize=*) echo "$flag" >> ../inst/exported_flags.txt ;;
   esac
 done
 
-# 3. Build ZLIB ----------------------------------------------------------------
-echo "--- [hdf5lib] Decompressing sources..."
-mkdir build
-cd build
 
-tar -xf "../src/zlib-$ZLIB_VER.tar.gz"
-tar -xf "../src/hdf5-$HDF5_VER.tar.gz"
-cp ../src/H5pubconf.h        "hdf5-$HDF5_VER/src/"
-cp ../src/find_byte_widths.c "hdf5-$HDF5_VER/"
-
-echo "--- [hdf5lib] Building ZLIB..."
-cd "zlib-$ZLIB_VER"
-export CPPFLAGS="-I. $R_CPPFLAGS"
-export LDFLAGS="$R_LDFLAGS"
+# Construct final flags
+export CC="$R_CC"
 export AR="$R_AR"
-echo "  CC:       $CC"
-echo "  CFLAGS:   $CFLAGS"
-echo "  LDFLAGS:  $LDFLAGS"
-echo "  AR:       $AR"
+export CFLAGS="$R_CFLAGS $R_CPICFLAGS -DNDEBUG -I../lib $R_CPPFLAGS"
 
-if [ "$WIN" -eq 1 ]; then
-  "$R_MAKE" -f win32/Makefile.gcc libz.a >/dev/null
-else
-  chmod +x ./configure
-  ./configure --static >/dev/null
-  "$R_MAKE" libz.a >/dev/null
+# Mimic CRAN's strict syntax checking when calling gcc/clang directly
+if [ "$USE_STRICT_FLAGS" = "true" ]; then
+  for flag in -pedantic -Wstrict-prototypes -Wall -Werror; do
+    case " $R_CFLAGS " in
+      *" $flag "*) R_CFLAGS="$R_CFLAGS" ;;
+      *)           R_CFLAGS="$R_CFLAGS $flag" ;;
+    esac
+  done
 fi
 
-# Extract ZLIB objects to merge them into the final library
-rm *.o
+# Use shell function instead of string variable to safely inject 
+# local package flags BEFORE the system R_CPPFLAGS. This prevents 
+# global system libraries from shadowing our bundled headers.
+c_build() {
+  $R_CC $R_CFLAGS $R_CPICFLAGS -DNDEBUG -I../lib "$@" $R_CPPFLAGS
+}
+echo "  c_build: $R_CC $R_CFLAGS $R_CPICFLAGS -DNDEBUG -I../lib \"\$@\" $R_CPPFLAGS"
+
+
+# 4. Set up build directory and vars -------------------------------------------
+echo "--- [hdf5lib] Extracting source tarballs..."
+
+tar -xf "../src/hdf5-$HDF5_VER.tar.gz"
+tar -xf "../src/filters/bitshuffle-$BSHUF_VER.tar.gz"
+tar -xf "../src/filters/bzip2-$BZIP2_VER.tar.gz"
+tar -xf "../src/filters/csnappy-$CSNAPPY_VER.tar.gz"
+tar -xf "../src/filters/c-blosc-$BLOSC1_VER.tar.gz"
+tar -xf "../src/filters/c-blosc2-$BLOSC2_VER.tar.gz"
+tar -xf "../src/filters/libaec-$LIBAEC_VER.tar.gz"
+tar -xf "../src/filters/liblzf-$LZF_VER.tar.gz"
+tar -xf "../src/filters/lz4-$LZ4_VER.tar.gz"
+tar -xf "../src/filters/zfp-$ZFP_VER.tar.gz"
+tar -xf "../src/filters/zlib-ng-$ZLIBNG_VER.tar.gz"
+tar -xf "../src/filters/zstd-$ZSTD_VER.tar.gz"
+
+# Standardize directory names for the build loops
+mv "hdf5-$HDF5_VER"            hdf5
+mv "c-blosc-$BLOSC1_VER"       blosc1
+mv "c-blosc2-$BLOSC2_VER"      blosc2
+mv "bitshuffle-$BSHUF_VER/src" bshuf
+mv "bzip2-$BZIP2_VER"          bzip2
+mv "zlib-ng-$ZLIBNG_VER"       gzip
+mv "liblzf-$LZF_VER"           lzf
+mv "lz4-$LZ4_VER/lib"          lz4
+mv "csnappy-$CSNAPPY_VER"      snappy
+mv "libaec-$LIBAEC_VER"        szip
+mv "zfp-$ZFP_VER"              zfp
+mv "zstd-$ZSTD_VER/lib"        zstd
+
+
+
+# 5. Build Shared Libs ---------------------------------------------------------
+echo "--- [hdf5lib] Building Shared Libs..."
+cp -r ../src/lib .
+cd lib
+
+"$R_EXE" -s -e "invisible(file.copy(file.path(R.home('include'), 'R_ext'), '.', recursive = TRUE))"
+
+# Compile and run generator to detect system type sizes
+# Use unquoted $CC to allow arguments like -std=gnu11
+echo "  c_build -o find_byte_widths$EXE find_byte_widths.c"
+c_build -o find_byte_widths$EXE find_byte_widths.c
+
+echo "  ./find_byte_widths$EXE | tr -d '\r' > H5_byte_widths.h"
+./find_byte_widths$EXE | tr -d '\r' > H5_byte_widths.h
+
+echo "  c_build -c r_compat.c -o r_compat.o"
+c_build -c r_compat.c -o r_compat.o
+
+echo "  c_build -I../hdf5/src -I../blosc1/blosc -I../blosc2/include -c hdf5lib.c -o hdf5lib.o"
+c_build -I../hdf5/src -I../blosc1/blosc -I../blosc2/include -c hdf5lib.c -o hdf5lib.o
+
+cd ..
+
+
+
+# 6. Build SNAPPY (csnappy) ----------------------------------------------------
+echo "--- [hdf5lib] Building SNAPPY (csnappy)..."
+cd snappy
+
+SNAPPY_FLAGS="-I. -Wno-constant-logical-operand"
+echo "  SNAPPY_FLAGS: $SNAPPY_FLAGS"
+
+for src in *.c; do
+  dest=snappy_$(basename "$src" .c).o
+  echo "  c_build \$SNAPPY_FLAGS -c $src -o $dest"
+  c_build $SNAPPY_FLAGS -c $src -o $dest
+done
+
+cp ../../src/config/snappy/snappy-c.h .
+
+cd ..
+
+
+
+# 7. Build GZIP (zlib-ng) ------------------------------------------------------
+echo "--- [hdf5lib] Building GZIP (zlib-ng)..."
+cd gzip
+
+chmod +x ./configure
+
+echo "  ./configure --zlib-compat --static --without-gzfileops"
+./configure --zlib-compat --static --without-gzfileops
+
+echo "  $R_MAKE libz.a >/dev/null"
+"$R_MAKE" libz.a >/dev/null
+
+# Extract zlib-ng objects so they can be merged into libhdf5z.a later
+rm -f *.o
 "$R_AR" -x libz.a
 
 cd ..
 
 
-# 4. Build HDF5 ----------------------------------------------------------------
-echo "--- [hdf5lib] Building HDF5..."
-cd "hdf5-$HDF5_VER"
+# 8. Build LZ4 -----------------------------------------------------------------
+echo "--- [hdf5lib] Building LZ4..."
+cd lz4
 
-# A. Generators
-# Compile and run generator to detect system type sizes (creates src/H5_byte_widths.h)
-# Use unquoted $CC to allow arguments like -std=gnu11
-$CC $CPPFLAGS $CFLAGS -o find_byte_widths$EXE ./find_byte_widths.c
-./find_byte_widths$EXE | tr -d '\r' > src/H5_byte_widths.h
+LZ4_FLAGS="-Wno-constant-logical-operand"
+echo "  LZ4_FLAGS: $LZ4_FLAGS"
 
-# B. Compilation
-# Use the pre-generated Makefile (from prep_hdf5.r) to build all objects
-# Explicitly passing CC/CFLAGS overrides the defaults in the Makefile
-"$R_EXE" -s -e "invisible(file.copy(R.home('include'), '.', recursive = TRUE))"
-
-# Define base flags
-CPPFLAGS="-Isrc -Ihl/src -I../zlib-$ZLIB_VER -Iinclude $R_CPPFLAGS"
-CPPFLAGS="$CPPFLAGS -DH5_BUILT_AS_STATIC_LIB -DH5_DLL= -DH5HL_DLL="
-
-echo "  CC:       $CC"
-echo "  CFLAGS:   $CFLAGS"
-echo "  CPPFLAGS: $CPPFLAGS"
-
-for src in src/*.c hl/src/*.c; do
-  obj=$(basename "$src" .c).o
-  echo "  \$CC \$CFLAGS \$CPPFLAGS -c $src -o $obj"
-  $CC $CFLAGS $CPPFLAGS -c "$src" -o "$obj"
+for src in *.c; do
+  dest=lz4_$(basename "$src" .c).o
+  echo "  c_build \$LZ4_FLAGS -c $src -o $dest"
+  c_build $LZ4_FLAGS -c $src -o $dest
 done
 
 cd ..
 
 
-# 5. Link and Archive ----------------------------------------------------------
+# 9. Build ZFP ---------------------------------------------------------------
+echo "--- [hdf5lib] Building ZFP..."
+cd zfp
+
+ZFP_FLAGS="-Iinclude -DBIT_STREAM_WORD_TYPE=uint8"
+echo "  ZFP_FLAGS: $ZFP_FLAGS"
+
+for src in src/*.c; do
+  dest=zfp_$(basename "$src" .c).o
+  echo "  c_build \$ZFP_FLAGS -c $src -o $dest"
+  c_build $ZFP_FLAGS -c $src -o $dest
+done
+
+cp -r include/* .
+cd ..
+
+
+# 10. Build ZSTD (Zstandard) ----------------------------------------------------
+echo "--- [hdf5lib] Building ZSTD..."
+cd zstd
+
+ZSTD_FLAGS="-I. -DZSTD_LIB_MINIFY=1 -DZSTD_LIB_DICTBUILDER=1 -DZSTD_LIB_DEPRECATED=0"
+ZSTD_FLAGS="$ZSTD_FLAGS -DZSTD_LEGACY_SUPPORT=0 -DZSTD_DISABLE_ASM -DZSTD_MULTITHREAD"
+
+if [ "$WIN" -eq 0 ]; then # On  macOS/Linux
+  # Apply both threading and the flags needed for qsort_r
+  ZSTD_FLAGS="$ZSTD_FLAGS -pthread -D_GNU_SOURCE -D_DARWIN_C_SOURCE"
+fi
+
+echo "  ZSTD_FLAGS: $ZSTD_FLAGS"
+
+for src in common/*.c compress/*.c decompress/*.c dictBuilder/*.c; do
+  dest=zstd_$(basename "$src" .c).o
+  echo "  c_build \$ZSTD_FLAGS -c $src -o $dest"
+  c_build $ZSTD_FLAGS -c $src -o $dest
+done
+
+cd ..
+
+
+# 11. Build BLOSC1 -------------------------------------------------------------
+echo "--- [hdf5lib] Building BLOSC1..."
+cd blosc1
+
+# Enable required internal codecs; Suppress compiler warnings
+BLOSC1_FLAGS="-Iblosc -I../hdf5/src -I../lz4 -I../zstd -I../gzip -I../snappy -I../zfp"
+BLOSC1_FLAGS="$BLOSC1_FLAGS -DHAVE_LZ4 -DHAVE_SNAPPY -DHAVE_ZLIB -DHAVE_ZSTD -DBLOSC_STRICT_ALIGN"
+BLOSC1_FLAGS="$BLOSC1_FLAGS -Wno-unused-variable -Wno-pedantic -Wno-deprecated-declarations"
+BLOSC1_FLAGS="$BLOSC1_FLAGS -Wno-unused-but-set-variable -Wno-unused-function -Wno-attributes"
+
+# Isolate Blosc1 symbols from Blosc2 to prevent link-time collisions
+for obj in get_run_16 get_match blosclz_compress blosclz_decompress fastcopy copy_match; do
+  BLOSC1_FLAGS="$BLOSC1_FLAGS -D${obj}=blosc1_${obj}"
+done
+
+echo "  BLOSC1_FLAGS: $BLOSC1_FLAGS"
+
+for src in blosc/*.c; do
+  dest=blosc1_$(basename "$src" .c).o
+  echo "  c_build \$BLOSC1_FLAGS -c $src -o $dest"
+  c_build $BLOSC1_FLAGS -c $src -o $dest
+done
+
+cp blosc/blosc.h blosc/blosc-export.h .
+cd ..
+
+
+# 11. Build BLOSC2 -------------------------------------------------------------
+echo "--- [hdf5lib] Building BLOSC2..."
+cd blosc2
+
+# Enable required internal codecs; Suppress compiler warnings
+BLOSC2_FLAGS="-Iinclude -Iblosc -I../lz4 -I../zstd -I../gzip -I../zfp"
+BLOSC2_FLAGS="$BLOSC2_FLAGS -DHAVE_ZSTD -DHAVE_ZLIB -DBLOSC_STRICT_ALIGN -DBIT_STREAM_WORD_TYPE=uint8"
+BLOSC2_FLAGS="$BLOSC2_FLAGS -Wno-unused-variable -Wno-pedantic -Wno-deprecated-declarations"
+BLOSC2_FLAGS="$BLOSC2_FLAGS -Wno-unused-but-set-variable -Wno-unused-function -Wno-attributes"
+echo "  BLOSC2_FLAGS: $BLOSC2_FLAGS"
+
+for src in blosc/*.c plugins/codecs/*/*.c ../../src/config/blosc2/*.c; do
+  dest=blosc2_$(basename "$src" .c).o
+  echo "  c_build \$BLOSC2_FLAGS -c $src -o $dest"
+  c_build $BLOSC2_FLAGS -c $src -o $dest
+done
+
+cp -r include/* .
+cd ..
+
+
+
+# 12. Build BZIP2 ---------------------------------------------------------------
+echo "--- [hdf5lib] Building BZIP2..."
+cd bzip2
+
+for src in *.c; do
+  dest=bzip2_$(basename "$src" .c).o
+  echo "  c_build -c $src -o $dest"
+  c_build -c $src -o $dest
+done
+
+cd ..
+
+
+
+# 13. Build LZF -----------------------------------------------------------------
+echo "--- [hdf5lib] Building LZF..."
+cd lzf
+
+LZF_FLAGS="-DLZF_STATE_ARG=1 -DSTRICT_ALIGN=1"
+echo "  LZF_FLAGS: $LZF_FLAGS"
+
+for src in *.c; do
+  dest=lzf_$(basename "$src" .c).o
+  echo "  c_build \$LZF_FLAGS -c $src -o $dest"
+  c_build $LZF_FLAGS -c $src -o $dest
+done
+
+cd ..
+
+
+# 14. Build SZIP (libaec) -------------------------------------------------------
+
+echo "--- [hdf5lib] Building SZIP (libaec)..."
+cd szip
+cp */*.h .
+
+for src in src/*.c; do
+  dest=szip_$(basename "$src" .c).o
+  echo "  c_build -I. -c $src -o $dest"
+  c_build -I. -c $src -o $dest
+done
+
+cd ..
+
+
+# 15. Build BITSHUFFLE ----------------------------------------------------------
+
+echo "--- [hdf5lib] Building BITSHUFFLE..."
+cd bshuf
+
+BSHUF_FLAGS="-DZSTD_SUPPORT=1 -I../lz4 -I../zstd -Wno-pointer-sign"
+
+# Isolate standalone symbols from Blosc2's vendored bitshuffle
+for obj in \
+    copy trans_bitrow_eight trans_byte_elem_remainder trans_bit_byte_remainder \
+    trans_elem trans_byte_bitrow_scal shuffle_bit_eightelem_scal untrans_bit_elem_scal \
+    trans_bit_elem_scal trans_byte_elem_scal trans_bit_byte_scal; do
+  BSHUF_FLAGS="$BSHUF_FLAGS -Dbshuf_${obj}=bshuf_${obj}_standalone"
+done
+
+echo "  BSHUF_FLAGS: $BSHUF_FLAGS"
+
+for src in *.c; do
+  dest=bshuf_$(basename "$src" .c).o
+  echo "  c_build \$BSHUF_FLAGS -c $src -o $dest"
+  c_build $BSHUF_FLAGS -c $src -o $dest
+done
+
+cd ..
+
+
+# 16. Build Plugins -------------------------------------------------------------
+echo "--- [hdf5lib] Building Plugins..."
+cp -r ../src/plugins .
+cd plugins
+
+PLUGIN_FLAGS="-I../hdf5/src -D__USE_MINGW_ANSI_STDIO=1"
+echo "  PLUGIN_FLAGS: $PLUGIN_FLAGS"
+
+for plugin in blosc1 blosc2 bshuf bzip2 lz4 lzf noop snappy zfp zstd; do
+  src="${plugin}_plugin.c"
+  dest="${plugin}_plugin.o"
+  echo "  c_build -I../$plugin \$PLUGIN_FLAGS -c $src -o $dest"
+  c_build -I../$plugin $PLUGIN_FLAGS -c $src -o $dest
+done
+
+cd ..
+
+
+# 17. Build HDF5 ----------------------------------------------------------------
+echo "--- [hdf5lib] Building HDF5..."
+cd hdf5
+
+HDF5_FLAGS="-DH5_BUILT_AS_STATIC_LIB -DH5_DLL= -DH5HL_DLL="
+HDF5_FLAGS="$HDF5_FLAGS -Isrc -Ihl/src -I../gzip -I../szip"
+echo "  HDF5_FLAGS: $HDF5_FLAGS"
+
+for src in src/*.c hl/src/*.c; do
+  dest=hdf5_$(basename "$src" .c).o
+  echo "  c_build \$HDF5_FLAGS -c $src -o $dest"
+  c_build $HDF5_FLAGS -c "$src" -o "$dest"
+done
+
+cd ..
+
+
+
+# 18. Link and Archive ---------------------------------------------------------
 echo "--- [hdf5lib] Linking static library..."
 
 # Detect LTO and rchk/wllvm
@@ -150,10 +437,10 @@ esac
 if [ "$WIN" -eq 0 ] && [ "$MINIFY" -eq 1 ] && command -v ld >/dev/null 2>&1; then
   echo "  Performing partial linking (ld -r)..."
   # Merge all .o files into one big object (deduplicates symbols/sections)
-  ld -r -o libhdf5z.o "hdf5-$HDF5_VER/"*.o "zlib-$ZLIB_VER/"*.o
+  ld -r -o libhdf5z.o */*.o
   "$R_AR" -crs libhdf5z.a libhdf5z.o
 else
-  "$R_AR" -crs libhdf5z.a "hdf5-$HDF5_VER/"*.o "zlib-$ZLIB_VER/"*.o
+  "$R_AR" -crs libhdf5z.a */*.o
 fi
 
 # Strip debug symbols to reduce installed package size
@@ -163,20 +450,19 @@ if [ "$MINIFY" -eq 1 ] && command -v strip >/dev/null 2>&1; then
 fi
 
 
-# 6. Installation --------------------------------------------------------------
+# 19. Installation --------------------------------------------------------------
 echo "--- [hdf5lib] Installing..."
 cd ..
 
 # Install headers and library
-mkdir -p inst/lib inst/include
-cp build/"hdf5-$HDF5_VER"/src/*.h    inst/include/
-cp build/"hdf5-$HDF5_VER"/hl/src/*.h inst/include/
-cp build/libhdf5z.a                  inst/lib/
+cp build/lib/*.h          inst/include/
+cp build/hdf5/src/*.h     inst/include/
+cp build/hdf5/hl/src/*.h  inst/include/
+cp build/libhdf5z.a       inst/lib/
 
 # Cleanup
-rm -rf src build
+rm -rf build
 
-echo "  Final install size: $(du -sh inst/ | cut -f1)"
-
-echo "--- [hdf5lib] Done. ---"
+echo "  Final library size: $(du -sh inst/ | cut -f1)"
+echo "--- [hdf5lib] HDF5 and Plugin Compilation Complete ---"
 exit 0

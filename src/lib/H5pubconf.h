@@ -73,13 +73,13 @@
 /* ========================================================================== */
 /* These settings define package info and enable core library policies. */
 #define H5_PACKAGE_NAME                 "HDF5"
-#define H5_PACKAGE_VERSION              "2.0.0"
-#define H5_PACKAGE_STRING               "HDF5 2.0.0"
+#define H5_PACKAGE_VERSION              "2.1.1"
+#define H5_PACKAGE_STRING               "HDF5 2.1.1"
 #define H5_PACKAGE_BUGREPORT            "help@hdfgroup.org"
 #define H5_PACKAGE                      "hdf5"
 #define H5_PACKAGE_TARNAME              "hdf5"
 #define H5_PACKAGE_URL                  "https://www.hdfgroup.org"
-#define H5_VERSION                      "2.0.0"
+#define H5_VERSION                      "2.1.1"
 
 #define H5_USE_FILE_LOCKING             1
 #define H5_IGNORE_DISABLED_FILE_LOCKS   1
@@ -105,13 +105,16 @@
 #define H5_HAVE_FILTER_DEFLATE          1
 #define H5_HAVE_ZLIB_H                  1
 #define H5_HAVE_LIBZ                    1
+#define H5_HAVE_FILTER_SZIP             1
+#define H5_HAVE_SZLIB_H                 1
+#define H5_HAVE_LIBSZ                   1
 #define H5_HAVE_DIRENT_H                1
 #define H5_HAVE_SYS_STAT_H              1
 #define H5_HAVE_SYS_TIME_H              1
 #define H5_HAVE_SYS_TYPES_H             1
 #define H5_HAVE_UNISTD_H                1
 #define H5_HAVE_TIME_H                  1
-#define H5_HAVE_PTHREAD_H               1 /* pthreads are standard in R's toolchain */
+#define H5_HAVE_PTHREAD_H               1
 #define H5_HAVE_THREADSAFE              1
 #define H5_HAVE_THREADS                 1
 
