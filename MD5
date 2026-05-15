@@ -1,11 +1,11 @@
-4c3ce6294b7ee5fa9c53d5bf1ebb0587 *DESCRIPTION
+8c923246ae13424b6e96173c1a003233 *DESCRIPTION
 628f607ae193945ea74bfff6d29c92b3 *LICENSE
 cdc90d1f3fd83f8b9ba83164f7581205 *NAMESPACE
-e6c07c780b085e023602a1aa4098941e *NEWS.md
+e659162c5b89832fcf05d2c99e8d4169 *NEWS.md
 74c8098e1fd350ca64c3ff89783931e4 *R/flags.r
 b65fbaff8a192e47626c722d6c5d0167 *R/hdf5lib-package.r
-04cb56f38670b85eebe73ad22a4c90d9 *README.md
-f1dc93ed63550d530d5f2c7ffb40087f *configure
+7f32fc4ab43bc3e065f1fb94aca503f6 *README.md
+1e870fa3b189c3e231f50645aac577df *configure
 8f8b24f0dac046b34646242bc35f2418 *configure.win
 dfc3774fd36b3a3c1272c0b555ef0793 *inst/COPYRIGHTS
 dd6cf8b697928f5f445a1381086e9241 *man/c_flags.Rd
@@ -27,8 +27,7 @@ a2c7a80cdea504fed31e6313db6d28c4 *src/filters/lz4-1.10.0.tar.gz
 a36651d8b1dc1020ff88b6b64506a197 *src/filters/zfp-1.0.1.tar.gz
 0691d5c92554d8ad60317dd65578238c *src/filters/zlib-ng-2.3.3.tar.gz
 82d8a7ca37fc58f07dc63c970ca0891c *src/filters/zstd-1.5.7.tar.gz
-2277b2a56e864ece0bbf7c769a2c1d38 *src/hdf5-2.1.0.tar.gz
-4a29c88a9f9ced607fa22fdb0407d2b6 *src/hdf5-2.1.1.tar.gz
+b84a02832fec8abc1ef0fc9a1244a667 *src/hdf5-2.1.1.tar.gz
 5cc23ae0d7faa68cb7e28d185dfc1057 *src/install.libs.R
 df8154db78a5142acc38bf9cd98a653e *src/lib/H5pubconf.h
 6c0a0602b2543aa16393a40a0f0f7f92 *src/lib/find_byte_widths.c
@@ -68,6 +67,9 @@ be678addd74839e9d564e2fb92abb2e5 *src/patches/hdf5-2.1.1/05-H5lib-settings.patch
 ae4bfdeee576f961001be05e6a97066d *src/patches/hdf5-2.1.1/08-misaligned-address.patch
 62f5b9dd97bc7e5b59c8c0654ee59936 *src/patches/hdf5-2.1.1/09-initialize-mtime.patch
 51fc9fd7218426b4e24e4d73fe2505c3 *src/patches/hdf5-2.1.1/10-double-typedef.patch
+5c123c8ff373ca48766a4102753f0991 *src/patches/hdf5-2.1.1/11-strncpy_nulterm.patch
+ebcf2e32a6a4f3dd356d1842857a5eac *src/patches/hdf5-2.1.1/12-truncation-to-memcpy.patch
+6903e22540254c51fd2c71649514d866 *src/patches/hdf5-2.1.1/13-const-discarded-qualifiers.patch
 ad153be045dbb23d531200135a096ecb *src/patches/libaec-1.1.6/01-void-arguments.patch
 045ed63154c5e96aa865203a576841d9 *src/patches/liblzf-3.6/01-posix-support.patch
 8de129332cd569e7d799b0a4966b3981 *src/patches/liblzf-3.6/02-expansion-to-defined.patch
