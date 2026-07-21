@@ -1,7 +1,7 @@
-8c923246ae13424b6e96173c1a003233 *DESCRIPTION
+90cba6cf4f92abb838daa66f65b7399e *DESCRIPTION
 628f607ae193945ea74bfff6d29c92b3 *LICENSE
 cdc90d1f3fd83f8b9ba83164f7581205 *NAMESPACE
-e659162c5b89832fcf05d2c99e8d4169 *NEWS.md
+982cda1ba1dcff1b034207d8f85a5207 *NEWS.md
 74c8098e1fd350ca64c3ff89783931e4 *R/flags.r
 b65fbaff8a192e47626c722d6c5d0167 *R/hdf5lib-package.r
 7f32fc4ab43bc3e065f1fb94aca503f6 *README.md
@@ -19,7 +19,7 @@ e1e07478326d623daf738d1ef8b68ee2 *src/config/snappy/snappy-c.h
 9a0f5415311385563cff6ff55ea93b6b *src/filters/bitshuffle-0.5.2.tar.gz
 45407ec97ebeb43daae7bcc910ce58c6 *src/filters/bzip2-1.0.8.tar.gz
 ecd477536abe2696edd7cec7e490be51 *src/filters/c-blosc-1.21.6.tar.gz
-92c576f8271716262597af3c804c8851 *src/filters/c-blosc2-2.23.1.tar.gz
+40891e812dfd2aaa670bdb7d7c4618a4 *src/filters/c-blosc2-2.23.1.tar.gz
 8fbab6166513c70a8016801bc261c65f *src/filters/csnappy-6c10c30.tar.gz
 7912f97ed0a5dbd59702cc7a3d34fc42 *src/filters/libaec-1.1.6.tar.gz
 9a24bfc7c6f8331ea1a7eb658e33f0c6 *src/filters/liblzf-3.6.tar.gz
@@ -50,6 +50,7 @@ dc98be1403637170c3c1ee505fd22027 *src/patches/c-blosc2-2.23.1/02-null-memcpy.pat
 70b970e52c623d044ec347b6b6062e96 *src/patches/c-blosc2-2.23.1/06-bool-logic.patch
 d6e17678c84872d5130ce9f004ab0a41 *src/patches/c-blosc2-2.23.1/07-void-parameters.patch
 322c233ae39f71709e383056d673493c *src/patches/c-blosc2-2.23.1/08-rm-export-defs.patch
+72552c8d421854d9885bf1041bdaa245 *src/patches/c-blosc2-2.23.1/09-const-warnings.patch
 59b002eded77defc6ff27efea5283711 *src/patches/hdf5-2.0.0/02-remove-attributes.patch
 4d96ba947066ad47f24184f24b1dde1d *src/patches/hdf5-2.0.0/03-hdf5-h-includes.patch
 4ee5c91be50c1556ba180761fba8bcd8 *src/patches/hdf5-2.0.0/04-fix-callback-types.patch
