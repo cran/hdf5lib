@@ -1,3 +1,10 @@
+# hdf5lib 2.2.0.0
+
+* Enables installation to read-only directories.
+* Dependency updates: HDF5 (2.1.1 to 2.2.0), c-blosc2 (2.23.1 to 3.3.3), and libaec (1.1.6 to 1.1.7).
+
+
+
 # hdf5lib 2.1.1.2
 
 * Patch `c-blosc2-2.23.1/blosc/frame.c` for `strncpy` warnings on GCC 16.

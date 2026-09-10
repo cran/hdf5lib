@@ -8,6 +8,7 @@
 
 #include <hdf5.h>
 #include <blosc2.h>
+#include <blosc2/codecs-registry.h>
 #include <b2nd.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,8 +21,13 @@
 #define DEFAULT_SHUFFLE 1
 #define DEFAULT_COMPCODE BLOSC_BLOSCLZ
 
-/* Max possible size: Base(8) + MaxDims(8) + Meta(1) = 17 */
-#define MAX_FILTER_VALUES (8 + BLOSC2_MAX_DIM + 1) 
+/* Max possible size: Base(8) + MaxDims(B2ND_MAX_DIM) + Meta(1).
+   This used to read BLOSC2_MAX_DIM, which c-blosc2 3.x removed.  That macro was
+   a stale duplicate: b2nd raised its own limit from 8 to 16 in c-blosc2 2.21.3
+   while BLOSC2_MAX_DIM stayed at 8, so this array was half the size b2nd could
+   actually produce.  The reference filter (Blosc/HDF5-Blosc2) tracks
+   B2ND_MAX_DIM here, so we do too. */
+#define MAX_FILTER_VALUES (8 + B2ND_MAX_DIM + 1) 
 
 #ifdef WORDS_BIGENDIAN
   #define B2ND_ENDIAN_PREFIX ">"
@@ -31,6 +37,12 @@
 
 #define B2ND_OPAQUE_NPDTYPE_FORMAT "|V%zd"
 #define B2ND_OPAQUE_NPDTYPE_MAXLEN (2 + 20 + 1)
+
+/* Blosc2 plugin codecs that need `compcode_meta` and the B2ND layer.  ZFP takes
+   its accuracy/precision/rate there; NDLZ takes its cell size (4 or 8). */
+#define IS_ZFP_CODEC(c) ((c) >= BLOSC_CODEC_ZFP_FIXED_ACCURACY && \
+                         (c) <= BLOSC_CODEC_ZFP_FIXED_RATE)
+#define NDLZ_DEFAULT_CELLSIZE 4
 
 #define PUSH_ERR(...) do { \
     H5Epush(H5E_DEFAULT, __FILE__, __func__, __LINE__, H5E_ERR_CLS, H5E_PLINE, H5E_CANTFILTER, __VA_ARGS__); \
@@ -79,6 +91,35 @@ static herr_t blosc2_set_local(hid_t dcpl, hid_t type, hid_t space) {
   bufsize = typesize;
   for (int i = 0; i < ndim; i++) bufsize *= (unsigned int)chunkshape[i];
 
+  /* Reject a configuration Blosc2 cannot honour *here*, while H5Dcreate2() can
+     still report it.  A mandatory filter that only fails once a chunk is
+     compressed fails inside H5Dclose(), where HDF5 discards the chunk and most
+     callers never look at the return value: the data is lost silently. */
+  const char *compname = NULL;
+  if (blosc2_compcode_to_compname((int)user_compcode, &compname) < 0) return -1;
+
+  if (user_compcode == BLOSC_CODEC_NDLZ) {
+    /* NDLZ reads its 4x4 / 8x8 cell grid straight out of the B2ND block shape,
+       so it can only see a 2-D array of single-byte items.  Rather than refuse
+       every other chunk, hand it the chunk's raw byte image: the leading axes
+       collapse into rows and the trailing axis widens by the item size.  The
+       bytes keep their original order, so this is a relabelling rather than a
+       transform, and B2ND records the shape in the frame for the read path. */
+    hsize_t rows, cols;
+    if (ndim == 1) {
+      rows = chunkshape[0];
+      cols = basetypesize;
+    } else {
+      rows = 1;
+      for (int i = 0; i < ndim - 1; i++) rows *= chunkshape[i];
+      cols = chunkshape[ndim - 1] * basetypesize;
+    }
+    ndim          = 2;
+    chunkshape[0] = rows;
+    chunkshape[1] = cols;
+    basetypesize  = 1;
+  }
+
   /* 3. Reconstruct cd_values: Strict Python Base Layout */
   values[0] = FILTER_BLOSC2_VERSION;
   values[1] = 0; /* Blocksize: 0 tells Python/Blosc to calculate it automatically */
@@ -90,9 +131,16 @@ static herr_t blosc2_set_local(hid_t dcpl, hid_t type, hid_t space) {
   
   /* 4. Append ndim and shape starting precisely at index 7 */
   size_t idx = 7;
-  values[idx++] = ndim;
-  for (int i = 0; i < ndim; i++) {
-      values[idx++] = (unsigned int)chunkshape[i];
+  if (ndim <= B2ND_MAX_DIM) {
+      values[idx++] = (unsigned int)ndim;
+      for (int i = 0; i < ndim; i++) {
+          values[idx++] = (unsigned int)chunkshape[i];
+      }
+  } else {
+      /* HDF5 allows ranks up to H5S_MAX_RANK (32) but cd_values can only carry
+         B2ND_MAX_DIM of them.  Record rank 0 ("no B2ND geometry") and fall back
+         to plain Blosc2, as the reference filter does, rather than failing. */
+      values[idx++] = 0;
   }
 
   /* 5. Append Custom Meta Value out of Python's reach */
@@ -174,12 +222,16 @@ static size_t blosc2_filter_function(
   int compcode       = cd_values[6];
   
   int ndim = -1;
-  int32_t chunkshape[BLOSC2_MAX_DIM];
+  int32_t chunkshape[B2ND_MAX_DIM];
   size_t idx = 7; 
 
   /* Only extract appended C geometry if the writer included it */
   if (cd_nelmts >= 8) {
       ndim = (int)cd_values[idx++];
+      if (ndim < 0 || ndim > B2ND_MAX_DIM)
+        PUSH_ERR("blosc2_filter: Invalid rank (%d) in filter parameters", ndim);
+      if (cd_nelmts < idx + (size_t)ndim)
+        PUSH_ERR("blosc2_filter: Filter parameters truncated");
       for (int i = 0; i < ndim; i++) {
           chunkshape[i] = (int32_t)cd_values[idx++];
       }
@@ -199,8 +251,13 @@ static size_t blosc2_filter_function(
     cparams.typesize = (int32_t)typesize;
     cparams.clevel   = clevel;
 
-    if (compcode == 33 || compcode == 34 || compcode == 35) {
+    if (IS_ZFP_CODEC(compcode)) {
         cparams.compcode_meta = meta_value;
+    } else if (compcode == BLOSC_CODEC_NDLZ) {
+        /* NDLZ reads its cell size here, and accepts only 4 or 8.  The meta slot
+           is shared with the pre-filter metadata, so fall back to the default
+           rather than handing NDLZ a value it will reject. */
+        cparams.compcode_meta = (meta_value == 8) ? 8 : NDLZ_DEFAULT_CELLSIZE;
     } else {
         cparams.compcode_meta = 0;
     }
@@ -210,8 +267,11 @@ static size_t blosc2_filter_function(
         cparams.filters_meta[i] = 0;
     }
 
-    /* ZFP strictly bypasses Bitmask pre-filters to prevent mantissa corruption */
-    if (compcode != 33 && compcode != 34 && compcode != 35) {
+    /* ZFP strictly bypasses Bitmask pre-filters to prevent mantissa corruption.
+       NDLZ sees the chunk as loose bytes, so the item-typed pre-filters have
+       nothing to work with either -- trunc-prec only handles 4- and 8-byte items
+       and fails the whole chunk if it is handed anything else. */
+    if (!IS_ZFP_CODEC(compcode) && compcode != BLOSC_CODEC_NDLZ) {
         int f_idx = 0;
         
         if (filter_mask & 8) {
@@ -237,7 +297,7 @@ static size_t blosc2_filter_function(
     blosc2_storage storage = {.cparams = &cparams, .contiguous = false};
 
     /* Multi-Dimensional (B2ND) Chunking */
-    if (ndim > 1 || (compcode >= 33 && compcode <= 35)) {
+    if (ndim >= 1 && (ndim > 1 || IS_ZFP_CODEC(compcode))) {
       b2nd_context_t *ctx = NULL;
       b2nd_array_t *array = NULL;
 
@@ -247,15 +307,15 @@ static size_t blosc2_filter_function(
         blocksize = sugg;
       }
       
-      int32_t blockdims[BLOSC2_MAX_DIM];
+      int32_t blockdims[B2ND_MAX_DIM];
       cparams.blocksize = compute_b2nd_block_shape(blocksize, typesize, ndim, chunkshape, blockdims);
 
-      int64_t chunkshape_l[BLOSC2_MAX_DIM];
+      int64_t chunkshape_l[B2ND_MAX_DIM];
       for (int i = 0; i < ndim; i++) chunkshape_l[i] = chunkshape[i];
 
       char dtype[B2ND_OPAQUE_NPDTYPE_MAXLEN];
 
-      if (compcode >= 33 && compcode <= 35) {
+      if (IS_ZFP_CODEC(compcode)) {
           snprintf(dtype, sizeof(dtype), "%sf%u", B2ND_ENDIAN_PREFIX, (unsigned int)typesize);
       } else {
           snprintf(dtype, sizeof(dtype), B2ND_OPAQUE_NPDTYPE_FORMAT, (size_t)typesize);
@@ -338,8 +398,8 @@ static size_t blosc2_filter_function(
         PUSH_ERR("blosc2_filter: Cannot create B2ND array");
       }
       
-      int64_t start[BLOSC2_MAX_DIM] = {0};
-      int64_t stop[BLOSC2_MAX_DIM] = {0};
+      int64_t start[B2ND_MAX_DIM] = {0};
+      int64_t stop[B2ND_MAX_DIM] = {0};
       
       /* Trust the B2ND header entirely. Ignore cd_values chunkshape perfectly. */
       int64_t size = schunk->typesize; 
