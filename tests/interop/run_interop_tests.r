@@ -1,7 +1,7 @@
 library(hdf5lib)
 
-interop_dir <- normalizePath(".", mustWork = TRUE)
-r_exe <- normalizePath(file.path(R.home("bin"), "R"), mustWork = FALSE)
+interop_dir <- normalizePath(".", winslash = "/", mustWork = TRUE)
+r_exe <- normalizePath(file.path(R.home("bin"), "R"), winslash = "/", mustWork = FALSE)
 
 # --- File Definitions ---
 c_reader      <- file.path(interop_dir, "verify_python_zoo.c")
@@ -69,4 +69,5 @@ result_write <- tryCatch({
 if (!identical(as.integer(result_write), 1L)) stop("Unexpected result from C writer.")
 if (!file.exists(c_h5)) stop("C Writer did not produce output file: ", c_h5)
 
-message("SUCCESS: C datasets generated successfully. Ready for Python verification.")
+message("SUCCESS: C datasets generated successfully. Ready for Python verification:\n",
+        "  python verify_c_zoo.py && python check_hdf5plugin_append.py")

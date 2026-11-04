@@ -8,22 +8,44 @@
 #include <blosc.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h> /* Required for stderr/fprintf */
+#include "hdf5lib.h"
 
 #define H5Z_FILTER_BLOSC 32001
 #define FILTER_BLOSC_VERSION 2
 #define BLOSC_VERSION_FORMAT 2
 #define BLOSC_MAX_TYPESIZE 255
 
-/* Force the error message directly to the console before HDF5 has a chance to swallow it */
+/* Report through HDF5's error stack, which the caller prints (or not) through
+   R's console; writing to the C library's stderr would bypass R. */
 #define PUSH_ERR(...) do { \
-    fprintf(stderr, "\n>>> [BLOSC_PLUGIN ERROR at line %d]: ", __LINE__); \
-    fprintf(stderr, __VA_ARGS__); \
-    fprintf(stderr, " <<<\n"); \
-    fflush(stderr); \
-    H5Epush(H5E_DEFAULT, __FILE__, __func__, __LINE__, H5E_ERR_CLS_g, H5E_PLINE, H5E_CANTFILTER, "Filter failed"); \
+    H5Epush(H5E_DEFAULT, __FILE__, __func__, __LINE__, H5E_ERR_CLS, H5E_PLINE, H5E_CANTFILTER, __VA_ARGS__); \
     return 0; \
 } while(0)
+
+/* c-blosc's *_ctx() functions start and join their worker threads on every
+   call, which costs more than the threads save on chunks of a megabyte or so.
+   Only its global context keeps a pool alive between calls, so use that when
+   more than one thread is wanted.  blosc_compress() lets the variables below
+   override the clevel, shuffle, codec, etc. it is given, so compress through
+   the global context only while none of them is set; blosc_decompress() reads
+   only BLOSC_NTHREADS and BLOSC_NOLOCK.  BLOSC_NOLOCK sends both functions to
+   the *_ctx() ones, so while it is set the threads start and stop on every
+   call whichever path is taken here.  (HDF5 makes every filter call under its
+   global lock, so the global compressor setting cannot change under a call in
+   progress.) */
+static int use_global_pool(int nthreads, int compressing) {
+  static const char *overrides[] = {
+    "BLOSC_CLEVEL", "BLOSC_SHUFFLE", "BLOSC_TYPESIZE",
+    "BLOSC_COMPRESSOR", "BLOSC_BLOCKSIZE", "BLOSC_SPLITMODE" };
+
+  if (nthreads <= 1) return 0;
+  if (compressing) {
+    for (size_t i = 0; i < sizeof(overrides) / sizeof(overrides[0]); i++)
+      if (getenv(overrides[i]) != NULL) return 0;
+  }
+  if (blosc_get_nthreads() != nthreads) blosc_set_nthreads(nthreads);
+  return 1;
+}
 
 static herr_t blosc_set_local(hid_t dcpl, hid_t type, hid_t space) {
   unsigned int flags;
@@ -82,16 +104,20 @@ static size_t blosc_filter(
 
   /* ----- Decompression Path ----- */
   if (flags & H5Z_FLAG_REVERSE) {
-    size_t uncomp_size, cbytes, blocksize;
-    
-    /* Safely extract the buffer sizes  */
-    blosc_cbuffer_sizes(*buf, &uncomp_size, &cbytes, &blocksize);
+    size_t uncomp_size;
+
+    /* blosc_decompress() trusts the sizes in the chunk's header, so make sure
+       the header describes exactly the nbytes HDF5 read */
+    if (blosc_cbuffer_validate(*buf, nbytes, &uncomp_size) < 0)
+      PUSH_ERR("Blosc chunk of %zu bytes is truncated or corrupt", nbytes);
     
     void *outbuf = H5allocate_memory(uncomp_size, 0);
     if (!outbuf) PUSH_ERR("Memory allocation failed for %zu bytes", uncomp_size);
     
-    /* Use context engine for thread-safe decompression  */
-    int status = blosc_decompress_ctx(*buf, outbuf, uncomp_size, 1);
+    int nthreads = hdf5lib_get_blosc_nthreads();
+    int status = use_global_pool(nthreads, 0)
+      ? blosc_decompress(*buf, outbuf, uncomp_size)
+      : blosc_decompress_ctx(*buf, outbuf, uncomp_size, nthreads);
     
     if (status <= 0) {
         H5free_memory(outbuf);
@@ -139,7 +165,15 @@ static size_t blosc_filter(
     void *outbuf = H5allocate_memory(out_alloc, 0);
     if (!outbuf) PUSH_ERR("Memory allocation failed for compression");
     
-    int comp_size = blosc_compress_ctx(clevel, doshuffle, typesize, nbytes, *buf, outbuf, out_alloc, compname, 0, 1);
+    int comp_size;
+    int nthreads = hdf5lib_get_blosc_nthreads();
+    if (use_global_pool(nthreads, 1)) {
+        blosc_set_compressor(compname);
+        blosc_set_blocksize(0);
+        comp_size = blosc_compress(clevel, doshuffle, typesize, nbytes, *buf, outbuf, out_alloc);
+    } else {
+        comp_size = blosc_compress_ctx(clevel, doshuffle, typesize, nbytes, *buf, outbuf, out_alloc, compname, 0, nthreads);
+    }
     
     if (comp_size <= 0) {
         H5free_memory(outbuf);
